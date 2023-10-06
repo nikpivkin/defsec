@@ -4,20 +4,18 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/aquasecurity/defsec/pkg/concurrency"
-	"github.com/aquasecurity/defsec/pkg/errs"
-	"github.com/aquasecurity/defsec/pkg/types"
-
-	"github.com/aquasecurity/defsec/pkg/debug"
-
-	"github.com/aws/aws-sdk-go-v2/service/sts"
-
-	"github.com/aquasecurity/defsec/internal/adapters/cloud/options"
-	"github.com/aquasecurity/defsec/pkg/progress"
-	"github.com/aquasecurity/defsec/pkg/state"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/arn"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
+
+	"github.com/aquasecurity/defsec/internal/adapters/cloud/options"
+	"github.com/aquasecurity/defsec/pkg/concurrency"
+	"github.com/aquasecurity/defsec/pkg/debug"
+	"github.com/aquasecurity/defsec/pkg/errs"
+	"github.com/aquasecurity/defsec/pkg/progress"
+	"github.com/aquasecurity/defsec/pkg/state"
+	"github.com/aquasecurity/defsec/pkg/types"
 )
 
 var registeredAdapters []ServiceAdapter
@@ -106,24 +104,6 @@ func (a *RootAdapter) CreateMetadataFromARN(arn string) types.Metadata {
 	return types.NewRemoteMetadata(arn)
 }
 
-type resolver struct {
-	endpoint string
-}
-
-func (r *resolver) ResolveEndpoint(_, region string, _ ...interface{}) (aws.Endpoint, error) {
-	return aws.Endpoint{
-		URL:           r.endpoint,
-		SigningRegion: region,
-		Source:        aws.EndpointSourceCustom,
-	}, nil
-}
-
-func createResolver(endpoint string) aws.EndpointResolverWithOptions {
-	return &resolver{
-		endpoint: endpoint,
-	}
-}
-
 func AllServices() []string {
 	var services []string
 	for _, reg := range registeredAdapters {
@@ -147,17 +127,19 @@ func Adapt(ctx context.Context, state *state.State, opt options.Options) error {
 
 	c.sessionCfg = cfg
 
-	if opt.Region != "" {
-		c.Debug("Using region '%s'", opt.Region)
-		c.sessionCfg.Region = opt.Region
-	}
-	if opt.Endpoint != "" {
-		c.Debug("Using endpoint '%s'", opt.Endpoint)
-		c.sessionCfg.EndpointResolverWithOptions = createResolver(opt.Endpoint)
-	}
-
 	c.Debug("Discovering caller identity...")
-	stsClient := sts.NewFromConfig(c.sessionCfg)
+	stsClient := sts.NewFromConfig(c.sessionCfg, func(o *sts.Options) {
+		if opt.Region != "" {
+			c.Debug("Using region %q", opt.Region)
+			o.Region = opt.Region
+		}
+
+		if opt.Endpoint != "" {
+			c.Debug("Using endpoint %q", opt.Endpoint)
+			o.BaseEndpoint = &opt.Endpoint
+		}
+	})
+
 	result, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
 		return fmt.Errorf("failed to discover AWS caller identity: %w", err)
